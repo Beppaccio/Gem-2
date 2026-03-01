@@ -27,7 +27,15 @@ def load_data(tickers, start_date, end_date):
     
     try:
         with st.spinner("Download dati in corso (potrebbero volerci alcuni secondi)..."):
-            data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+            # FIX IMPORTANTE: auto_adjust=False garantisce che 'Adj Close' sia presente
+            # necessario per le versioni recenti di yfinance
+            data = yf.download(
+                tickers, 
+                start=start_date, 
+                end=end_date, 
+                progress=False, 
+                auto_adjust=False
+            )
         return data
     except Exception as e:
         st.error(f"Errore durante il download dei dati: {e}")
@@ -163,180 +171,181 @@ if run_btn:
         raw_data = load_data(ticker_list, start_date, end_date)
         
         if raw_data is not None and not raw_data.empty:
-            # Prepara i DataFrame
-            price_data = raw_data['Adj Close']
-            open_data = raw_data['Open']
-            volume_data = raw_data['Volume']
-            qqq_series = price_data['QQQ']
-            
-            if 'QQQ' in ticker_list:
-                ticker_list.remove('QQQ')
-
-            # 2. Loop di Backtesting
-            st.info("Elaborazione backtest in corso...")
-            
-            # Variabili stato
-            portfolio = {} 
-            cash = initial_capital
-            trades_log = []
-            equity_history = []
-            
-            # Indici validi (dopo periodo MA)
-            # Troviamo l'indice nel DataFrame che corrisponde alla data d'inizio + buffer
-            # Per semplicità usiamo gli indici del DataFrame
-            all_dates = price_data.index
-            
-            # Trova il primo indice dove abbiamo abbastanza dati per la MA200
-            start_idx = qqq_ma + 130 # MA + dati per score
-            
-            if start_idx >= len(all_dates):
-                st.error("Periodo selezionato troppo corto per calcolare MA200 e Score.")
+            # Verifica che le colonne esistano (check di sicurezza per yfinance)
+            if 'Adj Close' not in raw_data.columns:
+                st.error("Errore: La colonna 'Adj Close' non è presente nei dati scaricati. Prova a cambiare la data o i ticker.")
             else:
-                # Loop sugli indici
-                for i in range(start_idx, len(all_dates)):
-                    date = all_dates[i]
-                    
-                    # --- FASE 1: ANALISI (Giorno T) ---
-                    is_uptrend = get_qqq_trend(qqq_series, i, qqq_ma)
-                    
-                    # Calcola Scores
-                    current_scores = {}
-                    for ticker in ticker_list:
-                        # Controlla se il ticker esiste nei dati
-                        if ticker not in price_data.columns: continue
-                        
-                        # Slice dati fino a oggi
-                        hist_close = price_data[ticker].iloc[:i+1]
-                        hist_vol = volume_data[ticker].iloc[:i+1]
-                        
-                        # Drop NaN
-                        hist_close = hist_close.dropna()
-                        hist_vol = hist_vol.dropna()
-                        
-                        if len(hist_close) < 130: continue
-                        
-                        df_t = pd.DataFrame({'Close': hist_close, 'Volume': hist_vol})
-                        try:
-                            score = calculate_momentum_score(df_t)
-                            if score >= min_score:
-                                current_scores[ticker] = score
-                        except:
-                            continue
-                    
-                    # Selezione Target
-                    ranked = sorted(current_scores.items(), key=lambda item: item[1], reverse=True)
-                    target_tickers = [t[0] for t in ranked[:top_n]]
-                    
-                    if not is_uptrend:
-                        # In downtrend, teniamo solo quelli che abbiamo già e che sono ancora nel top
-                        target_tickers = [t for t in target_tickers if t in portfolio.keys()]
-                    
-                    # --- FASE 2: ESECUZIONE (Simulata su T usando Open, o meglio T+1) ---
-                    # Per semplicità nel loop singolo, usiamo Open del giorno T come prezzo di esecuzione
-                    # In produzione reale bisognerebbe shiftare di 1.
-                    
-                    current_equity = cash
-                    for t, shares in portfolio.items():
-                        if t in price_data.columns:
-                            price = price_data[t].iloc[i]
-                            if pd.notna(price):
-                                current_equity += shares * price
-                    
-                    equity_history.append({'Date': date, 'Equity': current_equity})
-                    
-                    # Calcolo target value
-                    num_pos = len(target_tickers)
-                    target_val = current_equity / num_pos if num_pos > 0 else 0
-                    
-                    # Esecuzione Trade
-                    # 1. Exit
-                    to_exit = set(portfolio.keys()) - set(target_tickers)
-                    for ticker in to_exit:
-                        shares = portfolio[ticker]
-                        if ticker in open_data.columns:
-                            price_exec = open_data[ticker].iloc[i]
-                            if pd.notna(price_exec):
-                                proceeds = shares * price_exec
-                                cash += proceeds
-                                trades_log.append({
-                                    'symbol': ticker, 'Date': date, 'shares': shares,
-                                    'price': round(price_exec, 2), 'value': round(proceeds, 2), 'type': 'Exit'
-                                })
-                                del portfolio[ticker]
-                    
-                    # 2. Rebalance / Entry
-                    for ticker in target_tickers:
-                        # Verifica dati
-                        if ticker not in open_data.columns or ticker not in price_data.columns: continue
-                        price_exec = open_data[ticker].iloc[i]
-                        price_close = price_data[ticker].iloc[i]
-                        if pd.isna(price_exec): continue
+                # Prepara i DataFrame
+                price_data = raw_data['Adj Close']
+                open_data = raw_data['Open']
+                volume_data = raw_data['Volume']
+                qqq_series = price_data['QQQ']
+                
+                if 'QQQ' in ticker_list:
+                    ticker_list.remove('QQQ')
 
-                        if ticker in portfolio:
-                            # Rebalance
-                            curr_shares = portfolio[ticker]
-                            curr_val = curr_shares * price_close
-                            diff = target_val - curr_val
+                # 2. Loop di Backtesting
+                st.info("Elaborazione backtest in corso...")
+                
+                # Variabili stato
+                portfolio = {} 
+                cash = initial_capital
+                trades_log = []
+                equity_history = []
+                
+                # Indici validi (dopo periodo MA)
+                all_dates = price_data.index
+                
+                # Trova il primo indice dove abbiamo abbastanza dati per la MA200 + Score
+                start_idx = qqq_ma + 130 
+                
+                if start_idx >= len(all_dates):
+                    st.error("Periodo selezionato troppo corto per calcolare MA200 e Score.")
+                else:
+                    # Loop sugli indici per velocizzare lo slicing
+                    for i in range(start_idx, len(all_dates)):
+                        date = all_dates[i]
+                        
+                        # --- FASE 1: ANALISI (Giorno T) ---
+                        is_uptrend = get_qqq_trend(qqq_series, i, qqq_ma)
+                        
+                        # Calcola Scores
+                        current_scores = {}
+                        for ticker in ticker_list:
+                            # Controlla se il ticker esiste nei dati
+                            if ticker not in price_data.columns: continue
                             
-                            if abs(diff) > 100: # Soglia minima trade
-                                shares_trade = int(diff / price_exec)
-                                if shares_trade > 0:
-                                    cost = shares_trade * price_exec
+                            # Slice dati fino a oggi
+                            hist_close = price_data[ticker].iloc[:i+1]
+                            hist_vol = volume_data[ticker].iloc[:i+1]
+                            
+                            # Drop NaN
+                            hist_close = hist_close.dropna()
+                            hist_vol = hist_vol.dropna()
+                            
+                            if len(hist_close) < 130: continue
+                            
+                            df_t = pd.DataFrame({'Close': hist_close, 'Volume': hist_vol})
+                            try:
+                                score = calculate_momentum_score(df_t)
+                                if score >= min_score:
+                                    current_scores[ticker] = score
+                            except:
+                                continue
+                        
+                        # Selezione Target
+                        ranked = sorted(current_scores.items(), key=lambda item: item[1], reverse=True)
+                        target_tickers = [t[0] for t in ranked[:top_n]]
+                        
+                        if not is_uptrend:
+                            # In downtrend, teniamo solo quelli che abbiamo già e che sono ancora nel top
+                            target_tickers = [t for t in target_tickers if t in portfolio.keys()]
+                        
+                        # --- FASE 2: ESECUZIONE ---
+                        # Usiamo Open del giorno T come prezzo di esecuzione per la simulazione
+                        
+                        current_equity = cash
+                        for t, shares in portfolio.items():
+                            if t in price_data.columns:
+                                price = price_data[t].iloc[i]
+                                if pd.notna(price):
+                                    current_equity += shares * price
+                        
+                        equity_history.append({'Date': date, 'Equity': current_equity})
+                        
+                        # Calcolo target value
+                        num_pos = len(target_tickers)
+                        target_val = current_equity / num_pos if num_pos > 0 else 0
+                        
+                        # Esecuzione Trade
+                        # 1. Exit
+                        to_exit = set(portfolio.keys()) - set(target_tickers)
+                        for ticker in to_exit:
+                            shares = portfolio[ticker]
+                            if ticker in open_data.columns:
+                                price_exec = open_data[ticker].iloc[i]
+                                if pd.notna(price_exec):
+                                    proceeds = shares * price_exec
+                                    cash += proceeds
+                                    trades_log.append({
+                                        'symbol': ticker, 'Date': date, 'shares': shares,
+                                        'price': round(price_exec, 2), 'value': round(proceeds, 2), 'type': 'Exit'
+                                    })
+                                    del portfolio[ticker]
+                        
+                        # 2. Rebalance / Entry
+                        for ticker in target_tickers:
+                            # Verifica dati
+                            if ticker not in open_data.columns or ticker not in price_data.columns: continue
+                            price_exec = open_data[ticker].iloc[i]
+                            price_close = price_data[ticker].iloc[i]
+                            if pd.isna(price_exec): continue
+
+                            if ticker in portfolio:
+                                # Rebalance
+                                curr_shares = portfolio[ticker]
+                                curr_val = curr_shares * price_close
+                                diff = target_val - curr_val
+                                
+                                if abs(diff) > 100: # Soglia minima trade
+                                    shares_trade = int(diff / price_exec)
+                                    if shares_trade > 0:
+                                        cost = shares_trade * price_exec
+                                        if cash >= cost:
+                                            cash -= cost
+                                            portfolio[ticker] += shares_trade
+                                            trades_log.append({'symbol': ticker, 'Date': date, 'shares': shares_trade, 'price': round(price_exec, 2), 'value': round(cost, 2), 'type': 'Increase'})
+                                    elif shares_trade < 0:
+                                        cash += abs(shares_trade) * price_exec
+                                        portfolio[ticker] += shares_trade
+                                        trades_log.append({'symbol': ticker, 'Date': date, 'shares': abs(shares_trade), 'price': round(price_exec, 2), 'value': round(abs(shares_trade) * price_exec, 2), 'type': 'Decrease'})
+                            else:
+                                # Entry
+                                shares_buy = int(target_val / price_exec)
+                                if shares_buy > 0:
+                                    cost = shares_buy * price_exec
                                     if cash >= cost:
                                         cash -= cost
-                                        portfolio[ticker] += shares_trade
-                                        trades_log.append({'symbol': ticker, 'Date': date, 'shares': shares_trade, 'price': round(price_exec, 2), 'value': round(cost, 2), 'type': 'Increase'})
-                                elif shares_trade < 0:
-                                    cash += abs(shares_trade) * price_exec
-                                    portfolio[ticker] += shares_trade
-                                    trades_log.append({'symbol': ticker, 'Date': date, 'shares': abs(shares_trade), 'price': round(price_exec, 2), 'value': round(abs(shares_trade) * price_exec, 2), 'type': 'Decrease'})
-                        else:
-                            # Entry
-                            shares_buy = int(target_val / price_exec)
-                            if shares_buy > 0:
-                                cost = shares_buy * price_exec
-                                if cash >= cost:
-                                    cash -= cost
-                                    portfolio[ticker] = shares_buy
-                                    trades_log.append({'symbol': ticker, 'Date': date, 'shares': shares_buy, 'price': round(price_exec, 2), 'value': round(cost, 2), 'type': 'Entry'})
+                                        portfolio[ticker] = shares_buy
+                                        trades_log.append({'symbol': ticker, 'Date': date, 'shares': shares_buy, 'price': round(price_exec, 2), 'value': round(cost, 2), 'type': 'Entry'})
 
-                # ==========================================
-                # VISUALIZZAZIONE RISULTATI
-                # ==========================================
-                
-                # Conversione risultati
-                df_equity = pd.DataFrame(equity_history)
-                df_trades = pd.DataFrame(trades_log)
-                
-                if not df_equity.empty:
-                    # Metriche
-                    final_val = df_equity['Equity'].iloc[-1]
-                    total_return = (final_val - initial_capital) / initial_capital * 100
+                    # ==========================================
+                    # VISUALIZZAZIONE RISULTATI
+                    # ==========================================
                     
-                    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-                    col_m1.metric("Valore Finale", f"${final_val:,.2f}")
-                    col_m2.metric("Rendimento Totale", f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
-                    col_m3.metric("Numero Trades", len(df_trades))
-                    col_m4.metric("Titoli Universo", len(ticker_list))
+                    # Conversione risultati
+                    df_equity = pd.DataFrame(equity_history)
+                    df_trades = pd.DataFrame(trades_log)
                     
-                    # Grafico Equity
-                    st.subheader("📊 Equity Curve")
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=df_equity['Date'], y=df_equity['Equity'], mode='lines', name='Portfolio Value'))
-                    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Tabella Trades
-                    st.subheader("📝 Log Trades")
-                    st.dataframe(df_trades, use_container_width=True)
-                    
-                    # Download CSV
-                    csv = df_trades.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Scarica CSV Trades",
-                        data=csv,
-                        file_name='strategy_trades.csv',
-                        mime='text/csv',
-                    )
-                else:
-                    st.warning("Nessun dato sufficiente per generare il grafico.")
+                    if not df_equity.empty:
+                        # Metriche
+                        final_val = df_equity['Equity'].iloc[-1]
+                        total_return = (final_val - initial_capital) / initial_capital * 100
+                        
+                        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                        col_m1.metric("Valore Finale", f"${final_val:,.2f}")
+                        col_m2.metric("Rendimento Totale", f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
+                        col_m3.metric("Numero Trades", len(df_trades))
+                        col_m4.metric("Titoli Universo", len(ticker_list))
+                        
+                        # Grafico Equity
+                        st.subheader("📊 Equity Curve")
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=df_equity['Date'], y=df_equity['Equity'], mode='lines', name='Portfolio Value'))
+                        fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Tabella Trades
+                        st.subheader("📝 Log Trades")
+                        st.dataframe(df_trades, use_container_width=True)
+                        
+                        # Download CSV
+                        csv = df_trades.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Scarica CSV Trades",
+                            data=csv,
+                            file_name='strategy_trades.csv',
+                            mime='text/csv',
+                        )
+                    else:
+                        st.warning("Nessun dato sufficiente per generare il grafico.")
