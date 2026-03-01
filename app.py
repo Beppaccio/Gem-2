@@ -27,8 +27,7 @@ def load_data(tickers, start_date, end_date):
     
     try:
         with st.spinner("Download dati in corso (potrebbero volerci alcuni secondi)..."):
-            # FIX IMPORTANTE: auto_adjust=False garantisce che 'Adj Close' sia presente
-            # necessario per le versioni recenti di yfinance
+            # FIX: auto_adjust=False garantisce che 'Adj Close' esista
             data = yf.download(
                 tickers, 
                 start=start_date, 
@@ -171,12 +170,18 @@ if run_btn:
         raw_data = load_data(ticker_list, start_date, end_date)
         
         if raw_data is not None and not raw_data.empty:
-            # Verifica che le colonne esistano (check di sicurezza per yfinance)
+            # Verifica che le colonne esistano
             if 'Adj Close' not in raw_data.columns:
-                st.error("Errore: La colonna 'Adj Close' non è presente nei dati scaricati. Prova a cambiare la data o i ticker.")
+                st.error("Errore: La colonna 'Adj Close' non è presente nei dati scaricati.")
             else:
                 # Prepara i DataFrame
                 price_data = raw_data['Adj Close']
+                
+                # --- FIX CRITICO: Verifica che QQQ sia stato scaricato correttamente ---
+                if 'QQQ' not in price_data.columns:
+                    st.error("Errore Critico: Impossibile trovare i dati per 'QQQ'. Il filtro di mercato è essenziale e non è stato scaricato (possibile timeout di yfinance).")
+                    st.stop() # Ferma l'esecuzione
+                
                 open_data = raw_data['Open']
                 volume_data = raw_data['Volume']
                 qqq_series = price_data['QQQ']
