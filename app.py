@@ -27,7 +27,7 @@ def load_data(tickers, start_date, end_date):
     
     try:
         with st.spinner("Download dati in corso (potrebbero volerci alcuni secondi)..."):
-            # FIX: auto_adjust=False garantisce che 'Adj Close' esista
+            # auto_adjust=False garantisce che 'Close' e 'Adj Close' siano presenti
             data = yf.download(
                 tickers, 
                 start=start_date, 
@@ -170,12 +170,12 @@ if run_btn:
         raw_data = load_data(ticker_list, start_date, end_date)
         
         if raw_data is not None and not raw_data.empty:
-            # Verifica che le colonne esistano
-            if 'Adj Close' not in raw_data.columns:
-                st.error("Errore: La colonna 'Adj Close' non è presente nei dati scaricati.")
+            # MODIFICA: Verifica presenza colonna 'Close' invece di 'Adj Close'
+            if 'Close' not in raw_data.columns:
+                st.error("Errore: La colonna 'Close' non è presente nei dati scaricati.")
             else:
-                # Prepara i DataFrame
-                price_data = raw_data['Adj Close']
+                # MODIFICA: Utilizziamo 'Close' (Prezzo di Chiusura) come principale fonte dati
+                price_data = raw_data['Close']
                 
                 # --- FIX CRITICO: Verifica che QQQ sia stato scaricato correttamente ---
                 if 'QQQ' not in price_data.columns:
@@ -283,7 +283,7 @@ if run_btn:
                             # Verifica dati
                             if ticker not in open_data.columns or ticker not in price_data.columns: continue
                             price_exec = open_data[ticker].iloc[i]
-                            price_close = price_data[ticker].iloc[i]
+                            price_close = price_data[ticker].iloc[i] # Qui usiamo il Close per valutare il portafoglio
                             if pd.isna(price_exec): continue
 
                             if ticker in portfolio:
